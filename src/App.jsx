@@ -55,6 +55,70 @@ function GeoRadar({ status }) {
   );
 }
 
+function PinPad({ employee, onSuccess, onCancel, isClockingIn }) {
+  const [entered, setEntered] = useState("");
+  const [shake, setShake] = useState(false);
+  const [attempts, setAttempts] = useState(0);
+  const [locked, setLocked] = useState(false);
+
+  const press = (digit) => {
+    if (locked || entered.length >= 2) return;
+    const next = entered + digit;
+    setEntered(next);
+    if (next.length === 2) {
+      if (next === employee.pin) {
+        setTimeout(() => onSuccess(), 150);
+      } else {
+        const newAttempts = attempts + 1;
+        setAttempts(newAttempts);
+        if (newAttempts >= 3) {
+          setLocked(true);
+          setTimeout(() => { setLocked(false); setAttempts(0); setEntered(""); }, 10000);
+        } else {
+          setShake(true);
+          setTimeout(() => { setShake(false); setEntered(""); }, 600);
+        }
+      }
+    }
+  };
+
+  const del = () => { if (!locked) setEntered((p) => p.slice(0, -1)); };
+
+  return (
+    <div style={S.pinOverlay} onClick={onCancel}>
+      <div style={S.pinModal} onClick={(e) => e.stopPropagation()}>
+        <div style={S.pinEmpRow}>
+          <div style={S.pinAvatar}>{employee.avatar}</div>
+          <div>
+            <div style={S.pinEmpName}>{employee.name}</div>
+            <div style={S.pinEmpAction}>{isClockingIn ? "Clocking in" : "Clocking out"} — enter your 2-digit PIN</div>
+          </div>
+        </div>
+        <div style={{ ...S.pinDots, ...(shake ? S.pinDotsShake : {}) }}>
+          {[0,1].map((i) => (
+            <div key={i} style={{ ...S.pinDot, ...(i < entered.length ? S.pinDotFilled : {}) }} />
+          ))}
+        </div>
+        {locked ? (
+          <div style={S.pinLocked}>🔒 Too many attempts. Wait 10 seconds.</div>
+        ) : attempts > 0 ? (
+          <div style={S.pinWrong}>Incorrect PIN ({3 - attempts} left)</div>
+        ) : (
+          <div style={S.pinHint}> </div>
+        )}
+        <div style={S.numpad}>
+          {[1,2,3,4,5,6,7,8,9].map((n) => (
+            <button key={n} style={S.numBtn} onClick={() => press(String(n))} disabled={locked}>{n}</button>
+          ))}
+          <button style={{ ...S.numBtn, ...S.numBtnGhost }} onClick={onCancel}>✕</button>
+          <button style={S.numBtn} onClick={() => press("0")} disabled={locked}>0</button>
+          <button style={{ ...S.numBtn, ...S.numBtnGhost }} onClick={del}>⌫</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminLogin({ onSuccess, onCancel }) {
   const [pw, setPw] = useState("");
   const [error, setError] = useState(false);
@@ -87,23 +151,26 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
   const [editEmp, setEditEmp] = useState(null);
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState("");
+  const [newPin, setNewPin] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const handleAdd = async () => {
     if (!newName.trim()) return;
+    if (newPin.length !== 2 || !/^\d{2}$/.test(newPin)) { alert("PIN must be exactly 2 digits."); return; }
     setSaving(true);
-    const emp = { name: newName.trim(), role: newRole.trim() || "Staff", avatar: makeAvatar(newName) };
+    const emp = { name: newName.trim(), role: newRole.trim() || "Staff", avatar: makeAvatar(newName), pin: newPin };
     const { data, error } = await supabase.from("employees").insert([emp]).select().single();
     if (!error && data) onUpdateEmployees([...employees, data]);
-    setNewName(""); setNewRole(""); setShowAdd(false); setSaving(false);
+    setNewName(""); setNewRole(""); setNewPin(""); setShowAdd(false); setSaving(false);
   };
 
   const handleEditSave = async () => {
     if (!editEmp.name.trim()) return;
+    if (editEmp.pin.length !== 2 || !/^\d{2}$/.test(editEmp.pin)) { alert("PIN must be exactly 2 digits."); return; }
     setSaving(true);
-    const updated = { name: editEmp.name.trim(), role: editEmp.role.trim(), avatar: makeAvatar(editEmp.name) };
+    const updated = { name: editEmp.name.trim(), role: editEmp.role.trim(), avatar: makeAvatar(editEmp.name), pin: editEmp.pin };
     const { error } = await supabase.from("employees").update(updated).eq("id", editEmp.id);
     if (!error) onUpdateEmployees(employees.map((e) => e.id === editEmp.id ? { ...editEmp, ...updated } : e));
     setEditEmp(null); setSaving(false);
@@ -153,9 +220,10 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
                   <div style={S.addFormTitle}>New Employee</div>
                   <input placeholder="Full name *" value={newName} onChange={(e) => setNewName(e.target.value)} style={S.input} />
                   <input placeholder="Role (e.g. Barista)" value={newRole} onChange={(e) => setNewRole(e.target.value)} style={S.input} />
+                  <input placeholder="2-digit PIN *" value={newPin} onChange={(e) => setNewPin(e.target.value.slice(0,2))} style={S.input} maxLength={2} inputMode="numeric" />
                   <div style={{ display: "flex", gap: 8 }}>
                     <button style={{ ...S.formBtn, ...S.formBtnPrimary }} onClick={handleAdd} disabled={saving}>{saving ? "Saving…" : "Add"}</button>
-                    <button style={S.formBtn} onClick={() => { setShowAdd(false); setNewName(""); setNewRole(""); }}>Cancel</button>
+                    <button style={S.formBtn} onClick={() => { setShowAdd(false); setNewName(""); setNewRole(""); setNewPin(""); }}>Cancel</button>
                   </div>
                 </div>
               )}
@@ -166,6 +234,7 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
                       <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
                         <input value={editEmp.name} onChange={(e) => setEditEmp({ ...editEmp, name: e.target.value })} style={S.input} placeholder="Full name" />
                         <input value={editEmp.role} onChange={(e) => setEditEmp({ ...editEmp, role: e.target.value })} style={S.input} placeholder="Role" />
+                        <input value={editEmp.pin} onChange={(e) => setEditEmp({ ...editEmp, pin: e.target.value.slice(0,2) })} style={S.input} placeholder="2-digit PIN" maxLength={2} inputMode="numeric" />
                         <div style={{ display: "flex", gap: 8 }}>
                           <button style={{ ...S.formBtn, ...S.formBtnPrimary }} onClick={handleEditSave} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
                           <button style={S.formBtn} onClick={() => setEditEmp(null)}>Cancel</button>
@@ -176,7 +245,7 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
                         <div style={S.empRowAvatar}>{emp.avatar}</div>
                         <div style={{ flex: 1 }}>
                           <div style={S.empRowName}>{emp.name}</div>
-                          <div style={S.empRowRole}>{emp.role}</div>
+                          <div style={S.empRowRole}>{emp.role} · PIN: {emp.pin}</div>
                         </div>
                         <button style={S.iconBtn} onClick={() => setEditEmp({ ...emp })}>✏️</button>
                         <button style={{ ...S.iconBtn, color: "#f87171" }} onClick={() => setConfirmDelete(emp)}>🗑</button>
@@ -250,7 +319,7 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
               <div style={S.settingsCard}>
                 <div style={S.settingsLabel}>Admin Password</div>
                 <div style={S.settingsValue}>Change in code: <code style={{ color: "#a5b4fc" }}>ADMIN_PASSWORD</code></div>
-                <div style={S.settingsHint}>Currently set to "{ADMIN_PASSWORD}". Update before deploying.</div>
+                <div style={S.settingsHint}>Currently set to "{ADMIN_PASSWORD}".</div>
               </div>
               <div style={S.settingsCard}>
                 <div style={S.settingsLabel}>Geofence</div>
@@ -263,7 +332,7 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
               <div style={S.settingsCard}>
                 <div style={S.settingsLabel}>Data Storage</div>
                 <div style={S.settingsValue}>Supabase (synced across devices)</div>
-                <div style={S.settingsHint}>All employees, shifts, and settings are stored in your Supabase database and shared across all devices.</div>
+                <div style={S.settingsHint}>All employees, shifts, and settings sync across all devices in real time.</div>
               </div>
             </div>
           )}
@@ -283,6 +352,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [pinTarget, setPinTarget] = useState(null);
 
   const [fence, setFence] = useState(null);
   const [userPos, setUserPos] = useState(null);
@@ -354,7 +424,7 @@ export default function App() {
 
   const isClockedIn = (id) => !!sessions[id];
 
-  const handleClock = async (employee) => {
+  const handleClock = (employee) => {
     const id = employee.id;
     if (!isClockedIn(id)) {
       if (fence) {
@@ -362,6 +432,15 @@ export default function App() {
         if (geoStatus === "denied" || geoStatus === "error") { setBlockModal({ ...employee, geoError: geoError || "Location unavailable." }); return; }
         if (geoStatus === "loading" || geoStatus === "unknown") { setBlockModal({ ...employee, geoError: "Waiting for location. Please try again." }); return; }
       }
+    }
+    setPinTarget({ employee, action: isClockedIn(id) ? "out" : "in" });
+  };
+
+  const handlePinSuccess = async () => {
+    const { employee, action } = pinTarget;
+    const id = employee.id;
+    setPinTarget(null);
+    if (action === "in") {
       setSessions((prev) => ({ ...prev, [id]: { clockIn: new Date() } }));
       setFlash({ id, type: "in" });
     } else {
@@ -405,6 +484,7 @@ export default function App() {
     <div style={S.root}>
       <div style={S.bg} />
 
+      {pinTarget && <PinPad employee={pinTarget.employee} isClockingIn={pinTarget.action === "in"} onSuccess={handlePinSuccess} onCancel={() => setPinTarget(null)} />}
       {showAdminLogin && <AdminLogin onSuccess={() => { setShowAdminLogin(false); setShowAdmin(true); }} onCancel={() => setShowAdminLogin(false)} />}
       {showAdmin && <AdminPanel employees={employees} log={log} fence={fence} onUpdateEmployees={setEmployees} onClearLog={() => setLog([])} onClose={() => setShowAdmin(false)} onEditFence={() => { setShowAdmin(false); setShowFenceSetup(true); }} />}
 
@@ -539,7 +619,7 @@ export default function App() {
           </div>
         )}
       </main>
-      <style>{"@keyframes radarPulse { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.8); opacity: 0; } }"}</style>
+      <style>{"@keyframes radarPulse { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.8); opacity: 0; } } @keyframes pinShake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-8px); } 40%,80% { transform: translateX(8px); } }"}</style>
     </div>
   );
 }
@@ -547,6 +627,22 @@ export default function App() {
 const S = {
   root: { minHeight: "100vh", background: "#0f1117", color: "#e8e8e8", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", position: "relative", overflow: "hidden" },
   bg: { position: "fixed", inset: 0, background: "radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,0.18) 0%, transparent 60%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(16,185,129,0.1) 0%, transparent 55%)", pointerEvents: "none", zIndex: 0 },
+  pinOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, backdropFilter: "blur(6px)" },
+  pinModal: { background: "#13151f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 24, padding: "28px 24px 24px", width: 300, display: "flex", flexDirection: "column", alignItems: "center", gap: 16, boxShadow: "0 32px 80px rgba(0,0,0,0.7)" },
+  pinEmpRow: { display: "flex", alignItems: "center", gap: 12, width: "100%" },
+  pinAvatar: { width: 44, height: 44, borderRadius: 12, background: "rgba(99,102,241,0.25)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#a5b4fc", flexShrink: 0 },
+  pinEmpName: { fontSize: 15, fontWeight: 700, color: "#fff" },
+  pinEmpAction: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+  pinDots: { display: "flex", gap: 20 },
+  pinDotsShake: { animation: "pinShake 0.5s ease" },
+  pinDot: { width: 20, height: 20, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.15)", background: "transparent", transition: "all 0.15s" },
+  pinDotFilled: { background: "#6366f1", border: "2px solid #6366f1", boxShadow: "0 0 10px rgba(99,102,241,0.5)" },
+  pinWrong: { fontSize: 12, color: "#f87171", height: 16 },
+  pinHint: { height: 16 },
+  pinLocked: { fontSize: 12, color: "#f87171", textAlign: "center" },
+  numpad: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, width: "100%" },
+  numBtn: { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontSize: 20, fontWeight: 600, borderRadius: 12, padding: "16px 0", cursor: "pointer", textAlign: "center" },
+  numBtnGhost: { background: "transparent", border: "1px solid transparent", color: "#6b7280", fontSize: 16 },
   adminOverlay: { position: "fixed", inset: 0, background: "#0c0e14", zIndex: 150, display: "flex", flexDirection: "column", overflow: "hidden" },
   adminPanel: { display: "flex", flexDirection: "column", height: "100%", maxWidth: 860, margin: "0 auto", width: "100%" },
   adminHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 28px", borderBottom: "1px solid rgba(255,255,255,0.08)" },
