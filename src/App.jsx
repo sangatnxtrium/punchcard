@@ -1,18 +1,12 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "https://azbataqbpacetzpvudoe.supabase.co";
+const SUPABASE_KEY = "sb_publishable_rlP4A8e_BbjzwctIHfGoHA_YhtWLKzR";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const DEFAULT_RADIUS = 25;
 const ADMIN_PASSWORD = "Eureka";
-const STORAGE_KEY_EMPLOYEES = "punchcard_employees";
-const STORAGE_KEY_LOG = "punchcard_log";
-const STORAGE_KEY_FENCE = "punchcard_fence";
-
-const DEFAULT_EMPLOYEES = [
-  { id: 1, name: "Maria Santos", role: "Barista", avatar: "MS" },
-  { id: 2, name: "James Okafor", role: "Cashier", avatar: "JO" },
-  { id: 3, name: "Priya Nair", role: "Supervisor", avatar: "PN" },
-  { id: 4, name: "Leo Brandt", role: "Cook", avatar: "LB" },
-  { id: 5, name: "Aisha Cole", role: "Barista", avatar: "AC" },
-];
 
 function makeAvatar(name) {
   const parts = name.trim().split(" ").filter(Boolean);
@@ -48,12 +42,6 @@ function getDistance(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-function load(key, fallback) {
-  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
-}
-function save(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
-}
 
 function GeoRadar({ status }) {
   const color = status === "inside" ? "#4ade80" : status === "outside" ? "#f87171" : status === "loading" ? "#facc15" : "#6b7280";
@@ -67,39 +55,76 @@ function GeoRadar({ status }) {
   );
 }
 
-// ─── Admin Panel ────────────────────────────────────────────────────────────
+function AdminLogin({ onSuccess, onCancel }) {
+  const [pw, setPw] = useState("");
+  const [error, setError] = useState(false);
+  const handleSubmit = () => {
+    if (pw === ADMIN_PASSWORD) { onSuccess(); }
+    else { setError(true); setPw(""); setTimeout(() => setError(false), 1500); }
+  };
+  return (
+    <div style={S.modalOverlay} onClick={onCancel}>
+      <div style={S.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={S.modalIcon}>🔐</div>
+        <div style={S.modalTitle}>Admin Access</div>
+        <div style={S.modalMsg}>Enter the admin password to continue.</div>
+        <input type="password" placeholder="Password" value={pw}
+          onChange={(e) => { setPw(e.target.value); setError(false); }}
+          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          style={{ ...S.input, width: "100%", boxSizing: "border-box", ...(error ? { borderColor: "#f87171" } : {}) }}
+          autoFocus />
+        {error && <div style={{ fontSize: 12, color: "#f87171" }}>Incorrect password</div>}
+        <button style={{ ...S.modalBtn, ...S.modalBtnPrimary, marginTop: 4 }} onClick={handleSubmit}>Enter</button>
+        <button style={S.modalBtn} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onClose, onEditFence }) {
-  const [view, setView] = useState("employees"); // employees | log | settings
+  const [view, setView] = useState("employees");
   const [showAdd, setShowAdd] = useState(false);
   const [editEmp, setEditEmp] = useState(null);
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!newName.trim()) return;
-    const emp = { id: Date.now(), name: newName.trim(), role: newRole.trim() || "Staff", avatar: makeAvatar(newName) };
-    onUpdateEmployees([...employees, emp]);
-    setNewName(""); setNewRole(""); setShowAdd(false);
+    setSaving(true);
+    const emp = { name: newName.trim(), role: newRole.trim() || "Staff", avatar: makeAvatar(newName) };
+    const { data, error } = await supabase.from("employees").insert([emp]).select().single();
+    if (!error && data) onUpdateEmployees([...employees, data]);
+    setNewName(""); setNewRole(""); setShowAdd(false); setSaving(false);
   };
 
-  const handleEditSave = () => {
+  const handleEditSave = async () => {
     if (!editEmp.name.trim()) return;
-    onUpdateEmployees(employees.map((e) => e.id === editEmp.id ? { ...editEmp, avatar: makeAvatar(editEmp.name) } : e));
-    setEditEmp(null);
+    setSaving(true);
+    const updated = { name: editEmp.name.trim(), role: editEmp.role.trim(), avatar: makeAvatar(editEmp.name) };
+    const { error } = await supabase.from("employees").update(updated).eq("id", editEmp.id);
+    if (!error) onUpdateEmployees(employees.map((e) => e.id === editEmp.id ? { ...editEmp, ...updated } : e));
+    setEditEmp(null); setSaving(false);
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
+    await supabase.from("employees").delete().eq("id", id);
     onUpdateEmployees(employees.filter((e) => e.id !== id));
     setConfirmDelete(null);
   };
 
-  // Group log by employee
+  const handleClearLog = async () => {
+    await supabase.from("shifts").delete().neq("id", 0);
+    onClearLog();
+    setConfirmClear(false);
+  };
+
   const logByEmp = {};
   log.forEach((entry) => {
-    const key = entry.employee.id;
-    if (!logByEmp[key]) logByEmp[key] = { employee: entry.employee, shifts: [], total: 0 };
+    const key = entry.employee_id;
+    if (!logByEmp[key]) logByEmp[key] = { name: entry.employee_name, avatar: entry.employee_avatar, shifts: [], total: 0 };
     logByEmp[key].shifts.push(entry);
     logByEmp[key].total += entry.duration;
   });
@@ -107,43 +132,33 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
   return (
     <div style={S.adminOverlay}>
       <div style={S.adminPanel}>
-        {/* Header */}
         <div style={S.adminHeader}>
-          <div style={S.adminTitle}>
-            <span style={{ fontSize: 20 }}>⚙️</span>
-            <span>Admin</span>
-          </div>
+          <div style={S.adminTitle}><span style={{ fontSize: 20 }}>⚙️</span><span>Admin</span></div>
           <button style={S.adminClose} onClick={onClose}>✕ Exit Admin</button>
         </div>
-
-        {/* Nav */}
         <div style={S.adminNav}>
           {[["employees","👥 Employees"], ["log","📋 Shift Log"], ["settings","🔧 Settings"]].map(([v, label]) => (
             <button key={v} style={{ ...S.adminNavBtn, ...(view === v ? S.adminNavActive : {}) }} onClick={() => setView(v)}>{label}</button>
           ))}
         </div>
-
         <div style={S.adminBody}>
-          {/* ── Employees ── */}
           {view === "employees" && (
             <div>
               <div style={S.adminSectionHeader}>
                 <span style={S.adminSectionTitle}>Team ({employees.length})</span>
                 <button style={S.addBtn} onClick={() => setShowAdd(true)}>+ Add Employee</button>
               </div>
-
               {showAdd && (
                 <div style={S.addForm}>
                   <div style={S.addFormTitle}>New Employee</div>
                   <input placeholder="Full name *" value={newName} onChange={(e) => setNewName(e.target.value)} style={S.input} />
                   <input placeholder="Role (e.g. Barista)" value={newRole} onChange={(e) => setNewRole(e.target.value)} style={S.input} />
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button style={{ ...S.formBtn, ...S.formBtnPrimary }} onClick={handleAdd}>Add</button>
+                    <button style={{ ...S.formBtn, ...S.formBtnPrimary }} onClick={handleAdd} disabled={saving}>{saving ? "Saving…" : "Add"}</button>
                     <button style={S.formBtn} onClick={() => { setShowAdd(false); setNewName(""); setNewRole(""); }}>Cancel</button>
                   </div>
                 </div>
               )}
-
               <div style={S.empList}>
                 {employees.map((emp) => (
                   <div key={emp.id} style={S.empRow}>
@@ -152,7 +167,7 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
                         <input value={editEmp.name} onChange={(e) => setEditEmp({ ...editEmp, name: e.target.value })} style={S.input} placeholder="Full name" />
                         <input value={editEmp.role} onChange={(e) => setEditEmp({ ...editEmp, role: e.target.value })} style={S.input} placeholder="Role" />
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button style={{ ...S.formBtn, ...S.formBtnPrimary }} onClick={handleEditSave}>Save</button>
+                          <button style={{ ...S.formBtn, ...S.formBtnPrimary }} onClick={handleEditSave} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
                           <button style={S.formBtn} onClick={() => setEditEmp(null)}>Cancel</button>
                         </div>
                       </div>
@@ -163,15 +178,14 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
                           <div style={S.empRowName}>{emp.name}</div>
                           <div style={S.empRowRole}>{emp.role}</div>
                         </div>
-                        <button style={S.iconBtn} onClick={() => setEditEmp({ ...emp })} title="Edit">✏️</button>
-                        <button style={{ ...S.iconBtn, color: "#f87171" }} onClick={() => setConfirmDelete(emp)} title="Remove">🗑</button>
+                        <button style={S.iconBtn} onClick={() => setEditEmp({ ...emp })}>✏️</button>
+                        <button style={{ ...S.iconBtn, color: "#f87171" }} onClick={() => setConfirmDelete(emp)}>🗑</button>
                       </>
                     )}
                   </div>
                 ))}
                 {employees.length === 0 && <div style={S.emptyMsg}>No employees yet. Add one above.</div>}
               </div>
-
               {confirmDelete && (
                 <div style={S.confirmBox}>
                   <div style={S.confirmMsg}>Remove <strong style={{ color: "#fff" }}>{confirmDelete.name}</strong>? This cannot be undone.</div>
@@ -183,55 +197,44 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
               )}
             </div>
           )}
-
-          {/* ── Shift Log ── */}
           {view === "log" && (
             <div>
               <div style={S.adminSectionHeader}>
                 <span style={S.adminSectionTitle}>Shift History ({log.length} shifts)</span>
                 {log.length > 0 && <button style={{ ...S.addBtn, background: "rgba(248,113,113,0.12)", color: "#f87171", border: "1px solid rgba(248,113,113,0.3)" }} onClick={() => setConfirmClear(true)}>Clear All</button>}
               </div>
-
               {confirmClear && (
                 <div style={S.confirmBox}>
                   <div style={S.confirmMsg}>Clear all shift history? This cannot be undone.</div>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button style={{ ...S.formBtn, background: "rgba(248,113,113,0.15)", color: "#f87171", border: "1px solid rgba(248,113,113,0.3)" }} onClick={() => { onClearLog(); setConfirmClear(false); }}>Clear</button>
+                    <button style={{ ...S.formBtn, background: "rgba(248,113,113,0.15)", color: "#f87171", border: "1px solid rgba(248,113,113,0.3)" }} onClick={handleClearLog}>Clear</button>
                     <button style={S.formBtn} onClick={() => setConfirmClear(false)}>Cancel</button>
                   </div>
                 </div>
               )}
-
-              {log.length === 0 ? (
-                <div style={S.emptyMsg}>No shifts recorded yet.</div>
-              ) : (
+              {log.length === 0 ? <div style={S.emptyMsg}>No shifts recorded yet.</div> : (
                 <>
-                  {/* Summary cards */}
                   <div style={S.summaryGrid}>
-                    {Object.values(logByEmp).map(({ employee, shifts, total }) => (
-                      <div key={employee.id} style={S.summaryCard}>
-                        <div style={S.summaryAvatar}>{employee.avatar}</div>
+                    {Object.values(logByEmp).map(({ name, avatar, shifts, total }) => (
+                      <div key={name} style={S.summaryCard}>
+                        <div style={S.summaryAvatar}>{avatar}</div>
                         <div>
-                          <div style={S.summaryName}>{employee.name}</div>
+                          <div style={S.summaryName}>{name}</div>
                           <div style={S.summaryStats}>{shifts.length} shift{shifts.length !== 1 ? "s" : ""} · {formatShortDuration(total)} total</div>
                         </div>
                       </div>
                     ))}
                   </div>
-
-                  {/* Full table */}
                   <div style={S.logTableWrap}>
                     <table style={S.table}>
-                      <thead>
-                        <tr>{["Employee", "Role", "Clock In", "Clock Out", "Duration"].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr>
-                      </thead>
+                      <thead><tr>{["Employee","Role","Clock In","Clock Out","Duration"].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
                       <tbody>
                         {log.map((entry) => (
                           <tr key={entry.id} style={S.tr}>
-                            <td style={S.td}><div style={S.logEmpCell}><div style={S.logAvatar}>{entry.employee.avatar}</div><span>{entry.employee.name}</span></div></td>
-                            <td style={{ ...S.td, color: "#6b7280", fontSize: 13 }}>{entry.employee.role}</td>
-                            <td style={S.td}>{formatTime(new Date(entry.clockIn))}</td>
-                            <td style={S.td}>{formatTime(new Date(entry.clockOut))}</td>
+                            <td style={S.td}><div style={S.logEmpCell}><div style={S.logAvatar}>{entry.employee_avatar}</div><span>{entry.employee_name}</span></div></td>
+                            <td style={{ ...S.td, color: "#6b7280", fontSize: 13 }}>{entry.employee_role}</td>
+                            <td style={S.td}>{formatTime(new Date(entry.clock_in))}</td>
+                            <td style={S.td}>{formatTime(new Date(entry.clock_out))}</td>
                             <td style={{ ...S.td, color: "#a5b4fc", fontWeight: 600 }}>{formatShortDuration(entry.duration)}</td>
                           </tr>
                         ))}
@@ -242,8 +245,6 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
               )}
             </div>
           )}
-
-          {/* ── Settings ── */}
           {view === "settings" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={S.settingsCard}>
@@ -258,11 +259,11 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
                 <button style={{ ...S.formBtn, ...S.formBtnPrimary, marginTop: 10 }} onClick={onEditFence}>
                   📍 {fence ? "Edit Work Location" : "Set Work Location"}
                 </button>
-                </div>
+              </div>
               <div style={S.settingsCard}>
                 <div style={S.settingsLabel}>Data Storage</div>
-                <div style={S.settingsValue}>Browser localStorage</div>
-                <div style={S.settingsHint}>Employees and shift history persist on this device. Clearing browser data will erase them.</div>
+                <div style={S.settingsValue}>Supabase (synced across devices)</div>
+                <div style={S.settingsHint}>All employees, shifts, and settings are stored in your Supabase database and shared across all devices.</div>
               </div>
             </div>
           )}
@@ -272,47 +273,18 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
   );
 }
 
-// ─── Admin Login ─────────────────────────────────────────────────────────────
-function AdminLogin({ onSuccess, onCancel }) {
-  const [pw, setPw] = useState("");
-  const [error, setError] = useState(false);
-  const handleSubmit = () => {
-    if (pw === ADMIN_PASSWORD) { onSuccess(); }
-    else { setError(true); setPw(""); setTimeout(() => setError(false), 1500); }
-  };
-  return (
-    <div style={S.modalOverlay} onClick={onCancel}>
-      <div style={S.modal} onClick={(e) => e.stopPropagation()}>
-        <div style={S.modalIcon}>🔐</div>
-        <div style={S.modalTitle}>Admin Access</div>
-        <div style={S.modalMsg}>Enter the admin password to continue.</div>
-        <input
-          type="password" placeholder="Password" value={pw}
-          onChange={(e) => { setPw(e.target.value); setError(false); }}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-          style={{ ...S.input, width: "100%", boxSizing: "border-box", ...(error ? { borderColor: "#f87171" } : {}) }}
-          autoFocus
-        />
-        {error && <div style={{ fontSize: 12, color: "#f87171" }}>Incorrect password</div>}
-        <button style={{ ...S.modalBtn, ...S.modalBtnPrimary, marginTop: 4 }} onClick={handleSubmit}>Enter</button>
-        <button style={S.modalBtn} onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [now, setNow] = useState(new Date());
-  const [employees, setEmployees] = useState(() => load(STORAGE_KEY_EMPLOYEES, DEFAULT_EMPLOYEES));
+  const [employees, setEmployees] = useState([]);
   const [sessions, setSessions] = useState({});
-  const [log, setLog] = useState(() => load(STORAGE_KEY_LOG, []));
+  const [log, setLog] = useState([]);
   const [activeTab, setActiveTab] = useState("clock");
   const [flash, setFlash] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
 
-  const [fence, setFence] = useState(() => load(STORAGE_KEY_FENCE, null));
+  const [fence, setFence] = useState(null);
   const [userPos, setUserPos] = useState(null);
   const [geoStatus, setGeoStatus] = useState("unknown");
   const [geoError, setGeoError] = useState(null);
@@ -321,10 +293,35 @@ export default function App() {
   const [blockModal, setBlockModal] = useState(null);
   const watchRef = useRef(null);
 
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      const [{ data: emps }, { data: shifts }, { data: settings }] = await Promise.all([
+        supabase.from("employees").select("*").order("created_at"),
+        supabase.from("shifts").select("*").order("created_at", { ascending: false }),
+        supabase.from("settings").select("*"),
+      ]);
+      if (emps) setEmployees(emps);
+      if (shifts) setLog(shifts);
+      if (settings) {
+        const fenceSetting = settings.find((s) => s.key === "fence");
+        if (fenceSetting) setFence(fenceSetting.value);
+      }
+      setLoading(false);
+    };
+    loadData();
+  }, []);
+
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
-  useEffect(() => { save(STORAGE_KEY_EMPLOYEES, employees); }, [employees]);
-  useEffect(() => { save(STORAGE_KEY_LOG, log); }, [log]);
-  useEffect(() => { save(STORAGE_KEY_FENCE, fence); }, [fence]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (fence) {
+      supabase.from("settings").upsert({ key: "fence", value: fence });
+    } else {
+      supabase.from("settings").delete().eq("key", "fence");
+    }
+  }, [fence]);
 
   useEffect(() => {
     if (!fence) return;
@@ -357,7 +354,7 @@ export default function App() {
 
   const isClockedIn = (id) => !!sessions[id];
 
-  const handleClock = (employee) => {
+  const handleClock = async (employee) => {
     const id = employee.id;
     if (!isClockedIn(id)) {
       if (fence) {
@@ -370,7 +367,18 @@ export default function App() {
     } else {
       const clockIn = sessions[id].clockIn;
       const clockOut = new Date();
-      setLog((prev) => [{ id: Date.now(), employee, clockIn: clockIn.toISOString(), clockOut: clockOut.toISOString(), duration: clockOut - clockIn }, ...prev]);
+      const duration = clockOut - clockIn;
+      const shift = {
+        employee_id: employee.id,
+        employee_name: employee.name,
+        employee_role: employee.role,
+        employee_avatar: employee.avatar,
+        clock_in: clockIn.toISOString(),
+        clock_out: clockOut.toISOString(),
+        duration,
+      };
+      const { data } = await supabase.from("shifts").insert([shift]).select().single();
+      if (data) setLog((prev) => [data, ...prev]);
       setSessions((prev) => { const n = { ...prev }; delete n[id]; return n; });
       setFlash({ id, type: "out" });
     }
@@ -379,6 +387,19 @@ export default function App() {
 
   const clockedInCount = Object.keys(sessions).length;
   const distanceToFence = fence && userPos ? Math.round(getDistance(userPos.lat, userPos.lon, fence.lat, fence.lon)) : null;
+
+  if (loading) {
+    return (
+      <div style={{ ...S.root, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        <div style={S.bg} />
+        <div style={{ position: "relative", zIndex: 1, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>⏱</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>PunchCard</div>
+          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>Loading…</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={S.root}>
@@ -419,7 +440,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Header */}
       <header style={S.header}>
         <div style={S.headerLeft}>
           <div style={S.logo}><span style={{ fontSize: 24 }}>⏱</span><span style={S.logoText}>PunchCard</span></div>
@@ -434,7 +454,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Geo Bar */}
       <div style={S.geoBar}>
         <div style={S.geoBarLeft}>
           <GeoRadar status={fence ? geoStatus : "unknown"} />
@@ -448,7 +467,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={S.tabs}>
         {["clock", "log"].map((tab) => (
           <button key={tab} style={{ ...S.tab, ...(activeTab === tab ? S.tabActive : {}) }} onClick={() => setActiveTab(tab)}>
@@ -508,10 +526,10 @@ export default function App() {
                 <tbody>
                   {log.map((entry) => (
                     <tr key={entry.id} style={S.tr}>
-                      <td style={S.td}><div style={S.logEmpCell}><div style={S.logAvatar}>{entry.employee.avatar}</div><span>{entry.employee.name}</span></div></td>
-                      <td style={{ ...S.td, color: "#6b7280", fontSize: 13 }}>{entry.employee.role}</td>
-                      <td style={S.td}>{formatTime(new Date(entry.clockIn))}</td>
-                      <td style={S.td}>{formatTime(new Date(entry.clockOut))}</td>
+                      <td style={S.td}><div style={S.logEmpCell}><div style={S.logAvatar}>{entry.employee_avatar}</div><span>{entry.employee_name}</span></div></td>
+                      <td style={{ ...S.td, color: "#6b7280", fontSize: 13 }}>{entry.employee_role}</td>
+                      <td style={S.td}>{formatTime(new Date(entry.clock_in))}</td>
+                      <td style={S.td}>{formatTime(new Date(entry.clock_out))}</td>
                       <td style={{ ...S.td, color: "#a5b4fc", fontWeight: 600 }}>{formatShortDuration(entry.duration)}</td>
                     </tr>
                   ))}
@@ -521,10 +539,7 @@ export default function App() {
           </div>
         )}
       </main>
-
-      <style>{`
-        @keyframes radarPulse { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.8); opacity: 0; } }
-      `}</style>
+      <style>{"@keyframes radarPulse { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.8); opacity: 0; } }"}</style>
     </div>
   );
 }
@@ -532,8 +547,6 @@ export default function App() {
 const S = {
   root: { minHeight: "100vh", background: "#0f1117", color: "#e8e8e8", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", position: "relative", overflow: "hidden" },
   bg: { position: "fixed", inset: 0, background: "radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,0.18) 0%, transparent 60%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(16,185,129,0.1) 0%, transparent 55%)", pointerEvents: "none", zIndex: 0 },
-
-  // Admin overlay
   adminOverlay: { position: "fixed", inset: 0, background: "#0c0e14", zIndex: 150, display: "flex", flexDirection: "column", overflow: "hidden" },
   adminPanel: { display: "flex", flexDirection: "column", height: "100%", maxWidth: 860, margin: "0 auto", width: "100%" },
   adminHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 28px", borderBottom: "1px solid rgba(255,255,255,0.08)" },
@@ -570,8 +583,6 @@ const S = {
   settingsLabel: { fontSize: 11, fontWeight: 700, color: "#6366f1", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 },
   settingsValue: { fontSize: 14, color: "#e8e8e8", fontWeight: 500 },
   settingsHint: { fontSize: 12, color: "#6b7280", marginTop: 6 },
-
-  // Modals
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, backdropFilter: "blur(4px)" },
   modal: { background: "#161820", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "32px 28px", maxWidth: 360, width: "90%", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, boxShadow: "0 24px 60px rgba(0,0,0,0.6)" },
   modalIcon: { fontSize: 40 },
@@ -586,8 +597,6 @@ const S = {
   radiusInput: { background: "transparent", border: "none", color: "#fff", fontSize: 16, fontWeight: 700, width: 60, textAlign: "right", outline: "none" },
   radiusUnit: { fontSize: 12, color: "#6b7280" },
   geoErrMsg: { fontSize: 12, color: "#f87171", textAlign: "center" },
-
-  // Header
   header: { position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 32px", borderBottom: "1px solid rgba(255,255,255,0.07)" },
   headerLeft: { display: "flex", alignItems: "center", gap: 16 },
   headerRight: { display: "flex", alignItems: "center", gap: 16 },
@@ -599,20 +608,13 @@ const S = {
   clock: { textAlign: "right" },
   clockTime: { fontSize: 24, fontWeight: 700, letterSpacing: "-1px", color: "#fff", fontVariantNumeric: "tabular-nums" },
   clockDate: { fontSize: 12, color: "#6b7280", marginTop: 2 },
-
-  // Geo
-  geoBar: { position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 32px", background: "rgba(255,255,255,0.025)", borderBottom: "1px solid rgba(255,255,255,0.06)" },
+  geoBar: { position: "relative", zIndex: 1, display: "flex", alignItems: "center", padding: "10px 32px", background: "rgba(255,255,255,0.025)", borderBottom: "1px solid rgba(255,255,255,0.06)" },
   geoBarLeft: { display: "flex", alignItems: "center", gap: 12 },
-  geoSetupBtn: { background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#a5b4fc", fontSize: 12, fontWeight: 600, padding: "6px 14px", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" },
   pulse: { position: "absolute", inset: 0, borderRadius: "50%", border: "2px solid", animation: "radarPulse 1.4s ease-out infinite" },
   radarDot: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", width: 12, height: 12, borderRadius: "50%" },
-
-  // Tabs
   tabs: { position: "relative", zIndex: 1, display: "flex", gap: 4, padding: "16px 32px 0" },
   tab: { background: "transparent", border: "none", color: "#6b7280", fontSize: 14, fontWeight: 500, padding: "8px 18px", borderRadius: "8px 8px 0 0", cursor: "pointer", transition: "color 0.2s", borderBottom: "2px solid transparent" },
   tabActive: { color: "#fff", borderBottom: "2px solid #6366f1", background: "rgba(99,102,241,0.08)" },
-
-  // Cards
   main: { position: "relative", zIndex: 1, padding: "28px 32px 40px" },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 },
   card: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, padding: "20px 22px", transition: "all 0.3s ease" },
