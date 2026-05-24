@@ -68,7 +68,7 @@ function GeoRadar({ status }) {
 }
 
 // ─── Admin Panel ────────────────────────────────────────────────────────────
-function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onClose }) {
+function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onClose, onEditFence }) {
   const [view, setView] = useState("employees"); // employees | log | settings
   const [showAdd, setShowAdd] = useState(false);
   const [editEmp, setEditEmp] = useState(null);
@@ -254,8 +254,11 @@ function AdminPanel({ employees, log, fence, onUpdateEmployees, onClearLog, onCl
               <div style={S.settingsCard}>
                 <div style={S.settingsLabel}>Geofence</div>
                 <div style={S.settingsValue}>{fence ? `Set · radius ${fence.radius}m` : "Not configured"}</div>
-                <div style={S.settingsHint}>Configure the geofence from the main clock screen using "Set Work Location".</div>
-              </div>
+                <div style={S.settingsHint}>Controls where employees are allowed to clock in.</div>
+                <button style={{ ...S.formBtn, ...S.formBtnPrimary, marginTop: 10 }} onClick={onEditFence}>
+                  📍 {fence ? "Edit Work Location" : "Set Work Location"}
+                </button>
+                </div>
               <div style={S.settingsCard}>
                 <div style={S.settingsLabel}>Data Storage</div>
                 <div style={S.settingsValue}>Browser localStorage</div>
@@ -382,7 +385,7 @@ export default function App() {
       <div style={S.bg} />
 
       {showAdminLogin && <AdminLogin onSuccess={() => { setShowAdminLogin(false); setShowAdmin(true); }} onCancel={() => setShowAdminLogin(false)} />}
-      {showAdmin && <AdminPanel employees={employees} log={log} fence={fence} onUpdateEmployees={setEmployees} onClearLog={() => setLog([])} onClose={() => setShowAdmin(false)} />}
+      {showAdmin && <AdminPanel employees={employees} log={log} fence={fence} onUpdateEmployees={setEmployees} onClearLog={() => setLog([])} onClose={() => setShowAdmin(false)} onEditFence={() => { setShowAdmin(false); setShowFenceSetup(true); }} />}
 
       {blockModal && (
         <div style={S.modalOverlay} onClick={() => setBlockModal(null)}>
@@ -443,7 +446,6 @@ export default function App() {
               : <span style={{ color: "#f87171" }}>Location {geoStatus}</span>}
           </div>
         </div>
-        <button style={S.geoSetupBtn} onClick={() => setShowFenceSetup(true)}>{fence ? "⚙ Edit Geofence" : "📍 Set Work Location"}</button>
       </div>
 
       {/* Tabs */}
